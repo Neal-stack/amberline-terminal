@@ -1014,26 +1014,7 @@
     help: 'Connect real market data with your own free Finnhub API key, check the connection, or remove the key.',
     mount(p) {
       const live = M.hasKey;
-      p.body.innerHTML = `
-        <div class="help keypage">
-          <section>
-            <h3>${!live ? 'No data source connected' : M.mock ? 'Connected to the local mock API' : 'Connected to ' + M.source}</h3>
-            <p>${live && M.mock
-              ? 'This page is using the mock server on localhost. Every price, name and headline it serves is made up for testing.'
-              : live && M.source === 'Astral'
-              ? 'Quotes, charts and SEC filings come from your Astral connector on claude.ai. To use Finnhub instead, add a key below.'
-              : live
-              ? 'Quotes, company profiles and headlines come from Finnhub using the key saved in this browser. Prices stream in during market hours and quotes refresh about once a minute.'
-              : 'Amberline shows real US stocks, ETFs and news from Finnhub. It needs your own Finnhub API key. Until you add one, the panels show tickers without prices.'}</p>
-            ${live ? '' : '<p>Get a free key at <a href="https://finnhub.io/register" target="_blank" rel="noopener noreferrer">finnhub.io/register</a>, copy it from your dashboard and paste it below.</p>'}
-          </section>
-          ${live ? `<section><h3>Status</h3><dl class="keys status-list">
-              <div><dt>Feed</dt><dd data-k="feed">…</dd></div>
-              <div><dt>Requests</dt><dd data-k="req">…</dd></div>
-              <div><dt>Historical charts</dt><dd data-k="candles">…</dd></div>
-              <div><dt>Key</dt><dd data-k="auth">…</dd></div>
-            </dl></section>` : ''}
-          <section>
+      const fhSec = `          <section>
             <h3>${live ? 'Change key' : 'Your Finnhub API key'}</h3>
             <form class="keyform" autocomplete="off">
               <label for="fhKey" class="label">API key</label>
@@ -1047,7 +1028,8 @@
             <p class="fine"><b>Sharing:</b> Finnhub's terms allow personal use only and forbid sharing its data, or results derived from it, without Finnhub's written approval. Before you present, screenshot, record or stream live data, get that approval or a plan licensed for display. See <a href="https://finnhub.io/terms-of-service" target="_blank" rel="noopener noreferrer">Finnhub's terms</a>.</p>
             <p class="fine">Your key is stored in this browser's local storage and is sent only to Finnhub. Anyone using this browser profile, and any other page on this site's address, can read it, so remove it on shared machines.</p>
           </section>
-          <section>
+`;
+      const tdSec = `          <section>
             <h3>Chart history · Twelve Data key (optional)</h3>
             <p>${M.hasHistoryKey ? 'Connected. <b>GP</b> charts load real daily and 5-minute history from Twelve Data, so 1M, 3M, 6M and 1Y all work.' : "Finnhub's free plan has no price history, so <b>GP</b> can only chart trades since you opened the page. A free Twelve Data key adds full 1M–1Y candlestick charts and the one-year line on <b>DES</b>."}</p>
             ${M.hasHistoryKey ? '' : '<p>Get one at <a href="https://twelvedata.com/register" target="_blank" rel="noopener noreferrer">twelvedata.com/register</a> (the Basic plan is free: 8 requests a minute, 800 a day), then paste it below.</p>'}
@@ -1062,6 +1044,24 @@
             </form>
             <p class="fine">Stored in this browser and sent only to Twelve Data. Their free plan is for personal use too.</p>
           </section>
+`;
+      const intro = !live ? 'Amberline shows real US stocks, ETFs and news from Finnhub. It needs your own Finnhub API key. Until you add one, the panels show tickers without prices.'
+        : M.mock ? 'This page is using the mock server on localhost. Every price, name and headline it serves is made up for testing.'
+        : M.source === 'Astral' ? 'Quotes, charts and SEC filings come from your Astral connector on claude.ai. To use Finnhub instead, add a key below.' : '';
+      p.body.innerHTML = `
+        <div class="help keypage">
+          <section>
+            <h3>${!live ? 'No data source connected' : M.mock ? 'Connected to the local mock API' : 'Connected to ' + M.source}</h3>
+            ${intro ? `<p>${intro}</p>` : ''}
+            ${live ? '' : '<p>Get a free key at <a href="https://finnhub.io/register" target="_blank" rel="noopener noreferrer">finnhub.io/register</a>, copy it from your dashboard and paste it below.</p>'}
+          </section>
+          ${live ? `<section><h3>Status</h3><dl class="keys status-list">
+              <div><dt>Feed</dt><dd data-k="feed">…</dd></div>
+              <div><dt>Requests</dt><dd data-k="req">…</dd></div>
+              <div><dt>Historical charts</dt><dd data-k="candles">…</dd></div>
+              <div><dt>Key</dt><dd data-k="auth">…</dd></div>
+            </dl></section>` : ''}
+          ${live ? `<details class="manage"><summary>Manage keys</summary>${fhSec}${M.hasHistoryKey ? tdSec : ''}</details>${M.hasHistoryKey ? '' : tdSec}` : fhSec + tdSec}
         </div>`;
       const tdForm = p.body.querySelector('.tdform');
       const tdMsg = p.body.querySelector('.tdmsg');
@@ -1076,9 +1076,9 @@
       });
       const tdClr = p.body.querySelector('[data-tdclear]');
       if (tdClr) tdClr.addEventListener('click', () => { M.setHistoryKey(''); location.reload(); });
-      const form = p.body.querySelector('form');
+      const form = p.body.querySelector('.keyform:not(.tdform)');
       const input = p.body.querySelector('#fhKey');
-      const msg = p.body.querySelector('.keymsg');
+      const msg = form.querySelector('.keymsg');
       form.addEventListener('submit', e => {
         e.preventDefault();
         const k = input.value.trim();

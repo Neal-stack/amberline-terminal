@@ -493,6 +493,11 @@ kbd { font: 600 10.5px var(--font-data); background: var(--key); color: var(--in
 .qt .x:hover { color: var(--dn); }
 .chip[aria-pressed="true"] { border-color: var(--up); color: var(--up); }
 
+.manage { border-top: 1px solid var(--rule); padding-top: 10px; }
+.manage summary { cursor: pointer; color: var(--amber); font: 600 11px var(--font-label); text-transform: uppercase; letter-spacing: .12em; }
+.manage[open] summary { margin-bottom: 12px; }
+.manage section + section { margin-top: 18px; }
+
 /* the disclaimer gets its own line when the function keys need the width */
 @media (max-width: 1400px) {
   .fkeys { flex-wrap: wrap; }
