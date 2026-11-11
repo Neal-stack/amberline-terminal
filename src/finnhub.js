@@ -112,6 +112,14 @@
       search: q => get('/search', { q, exchange: 'US' }, 600e3, 3),
       marketStatus: () => get('/stock/market-status', { exchange: 'US' }, 120e3, 0),
       marketHoliday: () => get('/stock/market-holiday', { exchange: 'US' }, 12 * 3600e3, 0),
+      recommendation: symbol => get('/stock/recommendation', { symbol }, 6 * 3600e3, 2),
+      earnings: symbol => get('/stock/earnings', { symbol }, 6 * 3600e3, 2),
+      earningsCalendar(from, to, symbol) {
+        const p = { from, to };
+        if (symbol) p.symbol = symbol;
+        return get('/calendar/earnings', p, 3600e3, 2);
+      },
+      insiders(symbol, from, to) { return get('/stock/insider-transactions', { symbol, from, to }, 3600e3, 2); },
 
       // Live trades over WebSocket. Calls onTrade(symbol, price, volume, ms),
       // onState(connecting | open | closed | off) and onError(message).

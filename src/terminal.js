@@ -475,6 +475,8 @@
               <div class="chips"><span class="label">Open</span>
                 <button type="button" class="chip" data-go="GP"><span class="fn">GP</span> Price graph</button>
                 <button type="button" class="chip" data-go="NEWS"><span class="fn">NEWS</span> Headlines</button>
+                ${i.type === 'equity' ? ['ANR', 'ERN', 'FA', 'INS'].map(f => `<button type="button" class="chip" data-go="${f}"><span class="fn">${f}</span> ${esc(FN[f].name)}</button>`).join('') : ''}
+                <button type="button" class="chip" data-wl></button>
               </div>
               <div class="chips peers" hidden><span class="label">Peers</span></div>
               <p class="src-note"></p>
@@ -487,11 +489,20 @@
       const marker = p.body.querySelector('.r52-track i');
       const cv = p.body.querySelector('.spark-wrap canvas');
       let prof = null, dead = false;
+      const wlBtn = p.body.querySelector('[data-wl]');
+      const wlSync = () => { const on = wlRead().includes(i.sym); wlBtn.textContent = on ? '✓ On watchlist' : '+ Watchlist'; wlBtn.setAttribute('aria-pressed', String(on)); };
+      wlSync();
       p.body.addEventListener('click', e => {
         const b = e.target.closest('button');
         if (!b) return;
         if (b.dataset.go) load(p, { fn: b.dataset.go, sym: i.sym });
         if (b.dataset.sym) open(p, 'DES', b.dataset.sym);
+        if (b.hasAttribute('data-wl')) {
+          const list = wlRead();
+          wlWrite(list.includes(i.sym) ? list.filter(x => x !== i.sym) : list.concat(i.sym));
+          wlSync();
+          wlRefresh();
+        }
       });
       const spark = () => { if (prof && prof.spark) drawSpark(cv, prof.spark(), i.last >= prof.spark()[0] ? C.up : C.dn); };
       const ro = new ResizeObserver(spark);
@@ -716,6 +727,288 @@
     }
   };
 
+  // ---------- analyst, earnings and fundamental screens ----------
+  const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const dayLabel = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? `${MON3[+m[2] - 1]} ${+m[3]} '${m[1].slice(2)}` : '—'; };
+  const monthLabel = iso => { const m = /^(\d{4})-(\d{2})/.exec(iso || ''); return m ? `${MON3[+m[2] - 1]} ${m[1]}` : '—'; };
+  const HOUR = { bmo: 'Before open', amc: 'After close', dmh: 'During hours' };
+  const usd = (v, d = 2) => (ok(v) ? (v < 0 ? '−$' : '$') + fmt(Math.abs(v), d) : '—');
+  const etFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD
+  const etToday = () => etFmt.format(new Date());
+  const daysUntil = iso => Math.round((Date.parse(iso + 'T00:00:00Z') - Date.parse(etToday() + 'T00:00:00Z')) / 864e5);
+
+  // A screen that loads once: shows "Loading…", then render(data) or the error.
+  function screen(p, s, what, fetch, render) {
+    p.body.innerHTML = `<div class="scr"><p class="notice">Loading ${what}…</p></div>`;
+    const host = p.body.firstChild;
+    let dead = false;
+    fetch().then(d => { if (!dead) render(host, d); }, err => { if (!dead) notice(host, errText(err), 'err'); });
+    host.addEventListener('click', e => {
+      const b = e.target.closest('[data-go], tr[data-sym], [data-sym]');
+      if (!b) return;
+      if (b.dataset.go) load(p, { fn: b.dataset.go, sym: s.sym });
+      else if (b.dataset.sym) open(p, b.dataset.fn || 'DES', b.dataset.sym);
+    });
+    return { syms: () => (s.sym ? [s.sym] : []), destroy() { dead = true; } };
+  }
+  const goChips = (sym, fns) => `<div class="chips"><span class="label">${esc(sym)}</span>${fns.map(f => `<button type="button" class="chip" data-go="${f}"><span class="fn">${f}</span> ${esc(FN[f].name)}</button>`).join('')}</div>`;
+
+  FN.ANR = {
+    name: 'Analyst Recommendations', sec: 'req', example: 'NVDA ANR',
+    help: 'Sell-side buy, hold and sell ratings: the consensus today and how it has moved over the last six months.',
+    mount(p, s) {
+      return screen(p, s, 'analyst ratings', () => M.analyst(s.sym), (host, r) => {
+        if (!r.rows.length) { notice(host, `Finnhub has no analyst ratings for ${esc(s.sym)}. Small caps and most ETFs aren't covered.`); return; }
+        const cur = r.rows[0];
+        const score = x => (5 * x.sb + 4 * x.b + 3 * x.h + 2 * x.s + x.ss) / x.total;
+        const pct = (n, x) => Math.round(n / x.total * 100);
+        const tone = r.score >= 3.5 ? 'up' : r.score < 2.5 ? 'dn' : 'key';
+        const SEG = [['sb', 'Strong buy', 'sb'], ['b', 'Buy', 'b'], ['h', 'Hold', 'h'], ['s', 'Sell', 's'], ['ss', 'Strong sell', 'ss']];
+        const prev = r.rows[r.rows.length - 1];
+        const drift = r.rows.length > 1 ? score(cur) - score(prev) : null;
+        host.innerHTML = `
+          <div class="scr-head">
+            <div><span class="label">Consensus · ${esc(monthLabel(cur.period))}</span><div class="big ${tone}">${esc(r.label)}</div>
+              <span class="muted">${fmt(r.score, 2)} on a 1–5 scale (5 = strong buy) · ${cur.total} analysts</span></div>
+            <div class="kpis">
+              <div><span class="label">Buy</span><b class="up">${pct(cur.sb + cur.b, cur)}%</b></div>
+              <div><span class="label">Hold</span><b>${pct(cur.h, cur)}%</b></div>
+              <div><span class="label">Sell</span><b class="dn">${pct(cur.s + cur.ss, cur)}%</b></div>
+              ${drift != null ? `<div><span class="label">vs ${esc(monthLabel(prev.period).slice(0, 3))}</span><b class="${dirOf(drift)}">${signed(drift, 2)}</b></div>` : ''}
+            </div>
+          </div>
+          <div class="stack" role="img" aria-label="Rating mix">${SEG.map(([k, l, c]) => cur[k] ? `<i class="st-${c}" style="flex:${cur[k]}" title="${l}: ${cur[k]}">${cur[k]}</i>` : '').join('')}</div>
+          <div class="stack-key">${SEG.map(([, l, c]) => `<span><i class="st-${c}"></i>${l}</span>`).join('')}</div>
+          <div class="tbl-wrap"><table class="qt"><thead><tr><th scope="col">Month</th>${SEG.map(([, l]) => `<th class="num" scope="col">${l}</th>`).join('')}<th class="num" scope="col">Total</th><th class="num" scope="col">% Buy</th><th class="num" scope="col">Score</th></tr></thead><tbody>
+            ${r.rows.map(x => `<tr><td>${esc(monthLabel(x.period))}</td>${SEG.map(([k]) => `<td class="num">${x[k]}</td>`).join('')}<td class="num">${x.total}</td><td class="num">${pct(x.sb + x.b, x)}%</td><td class="num">${fmt(score(x), 2)}</td></tr>`).join('')}
+          </tbody></table></div>
+          ${goChips(s.sym, ['ERN', 'FA', 'GP'])}
+          <p class="tbl-note">Monthly recommendation trends from Finnhub. Price targets and individual broker calls aren't in Finnhub's free plan.</p>`;
+      });
+    }
+  };
+
+  FN.ERN = {
+    name: 'Earnings', sec: 'req', example: 'AAPL ERN',
+    help: 'Next report date with EPS and revenue estimates, plus actual vs. estimated EPS and the surprise for recent quarters.',
+    mount(p, s) {
+      return screen(p, s, 'earnings', () => M.earnings(s.sym), (host, r) => {
+        const n = r.next, h = r.history.filter(x => ok(x.act));
+        const beats = h.filter(x => ok(x.est) && x.act > x.est).length;
+        const avgSurp = h.filter(x => ok(x.pct)).reduce((a, x, _, arr) => a + x.pct / arr.length, 0);
+        const d = n ? daysUntil(n.date) : null;
+        host.innerHTML = `
+          <div class="scr-head">
+            <div><span class="label">Next report</span>
+              <div class="big">${n ? esc(dayLabel(n.date)) : 'Not scheduled'}</div>
+              <span class="muted">${n ? `${esc(HOUR[n.hour] || 'Time not confirmed')} · ${d <= 0 ? 'today' : d === 1 ? 'tomorrow' : 'in ' + d + ' days'}${n.quarter ? ` · Q${n.quarter} FY${n.year}` : ''}` : 'No date in the next 120 days'}</span></div>
+            <div class="kpis">
+              ${n ? `<div><span class="label">EPS est.</span><b>${usd(n.epsEst)}</b></div><div><span class="label">Revenue est.</span><b>${ok(n.revEst) ? '$' + big(n.revEst) : '—'}</b></div>` : ''}
+              ${h.length ? `<div><span class="label">Beat rate</span><b class="${beats * 2 >= h.length ? 'up' : 'dn'}">${beats}/${h.length}</b></div><div><span class="label">Avg surprise</span><b class="${dirOf(avgSurp)}">${pctStr(avgSurp)}</b></div>` : ''}
+            </div>
+          </div>
+          ${r.history.length ? `<div class="tbl-wrap"><table class="qt"><thead><tr><th scope="col">Quarter</th><th scope="col">Period end</th><th class="num" scope="col">EPS est.</th><th class="num" scope="col">EPS actual</th><th class="num" scope="col">Surprise</th><th class="num" scope="col">Surprise %</th><th scope="col"></th></tr></thead><tbody>
+            ${r.history.map(x => `<tr><td>${x.quarter ? `Q${x.quarter} ${x.year}` : '—'}</td><td class="muted">${esc(dayLabel(x.period))}</td><td class="num">${usd(x.est)}</td><td class="num">${usd(x.act)}</td><td class="num ${dirOf(x.surprise)}">${ok(x.surprise) ? signed(x.surprise, 2) : '—'}</td><td class="num ${dirOf(x.pct)}">${pctStr(x.pct)}</td><td>${ok(x.act) && ok(x.est) ? `<span class="tag ${x.act > x.est ? 'up' : x.act < x.est ? 'dn' : ''}">${x.act > x.est ? 'Beat' : x.act < x.est ? 'Miss' : 'In line'}</span>` : ''}</td></tr>`).join('')}
+          </tbody></table></div>` : '<p class="notice">Finnhub has no earnings history for this symbol.</p>'}
+          ${goChips(s.sym, ['ANR', 'FA', 'GP'])}
+          <p class="tbl-note">EPS history and calendar from Finnhub. The free plan covers the last four reported quarters.</p>`;
+      });
+    }
+  };
+
+  FN.FA = {
+    name: 'Financial Analysis', sec: 'req', example: 'MSFT FA',
+    help: 'Margins, returns, per-share figures, valuation multiples and leverage by fiscal year or quarter.',
+    mount(p, s) {
+      s.freq = s.freq === 'quarterly' ? 'quarterly' : 'annual';
+      let data = null;
+      const ctl = screen(p, s, 'financials', () => M.fundamentals(s.sym), (host, d) => { data = d; draw(host); });
+      function cell(r, v) {
+        if (!ok(v)) return '—';
+        if (r.kind === 'usd') return usd(v);
+        if (r.kind === 'pct') return (r.signed ? signed(v, 1) : fmt(v, 1)) + '%';
+        return fmt(v, Math.abs(v) >= 100 ? 0 : Math.abs(v) >= 10 ? 1 : 2) + '×';
+      }
+      function draw(host) {
+        const t = data[s.freq];
+        if (!t.rows.length) { notice(host, `Finnhub has no financial data for ${esc(s.sym)}. ETFs and some recent listings aren't covered.`); return; }
+        const head = t.periods.map(per => s.freq === 'annual' ? 'FY' + per.slice(0, 4) : dayLabel(per));
+        let group = null;
+        host.innerHTML = `
+          <div class="most-top"><div class="seg" role="group" aria-label="Period"><button type="button" data-f="annual" aria-pressed="${s.freq === 'annual'}">Annual</button><button type="button" data-f="quarterly" aria-pressed="${s.freq === 'quarterly'}">Quarterly</button></div></div>
+          <div class="tbl-wrap"><table class="qt fa"><thead><tr><th scope="col">${s.freq === 'annual' ? 'Fiscal year' : 'Quarter ending'}</th>${head.map(x => `<th class="num" scope="col">${esc(x)}</th>`).join('')}</tr></thead><tbody>
+          ${t.rows.map(r => {
+            const g = r.group !== group ? `<tr class="grp"><th colspan="${t.periods.length + 1}" scope="rowgroup">${esc(r.group)}</th></tr>` : '';
+            group = r.group;
+            return g + `<tr><td>${esc(r.label)}</td>${t.periods.map(per => `<td class="num${r.signed ? ' ' + dirOf(r.values[per]) : ''}">${cell(r, r.values[per])}</td>`).join('')}</tr>`;
+          }).join('')}
+          </tbody></table></div>
+          ${goChips(s.sym, ['ERN', 'ANR', 'DES'])}
+          <p class="tbl-note">Ratios from Finnhub's reported financials. Valuation multiples use the price at each period end. Rows Finnhub doesn't report for this company are left out.</p>`;
+        host.querySelector('.seg').addEventListener('click', e => {
+          const b = e.target.closest('button');
+          if (!b) return;
+          s.freq = b.dataset.f;
+          save();
+          draw(host);
+        });
+      }
+      return ctl;
+    }
+  };
+
+  const INS_CODE = { P: 'Buy', S: 'Sale', A: 'Award', M: 'Option exercise', X: 'Option exercise', F: 'Tax withholding', G: 'Gift', D: 'Sold to issuer', C: 'Conversion', J: 'Other', I: 'Discretionary', W: 'Inheritance' };
+  FN.INS = {
+    name: 'Insider Transactions', sec: 'req', example: 'TSLA INS',
+    help: 'Form 4 trades by executives and directors over the past year, with open-market buying and selling totals.',
+    mount(p, s) {
+      return screen(p, s, 'insider trades', () => M.insiders(s.sym), (host, rows) => {
+        if (!rows.length) { notice(host, `No insider transactions for ${esc(s.sym)} in the past year.`); return; }
+        const cut = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
+        const recent = rows.filter(x => x.date >= cut);
+        const sum = code => recent.filter(x => x.code === code).reduce((a, x) => ({ n: a.n + 1, sh: a.sh + Math.abs(x.change || 0), v: a.v + Math.abs((x.change || 0) * (x.price || 0)) }), { n: 0, sh: 0, v: 0 });
+        const buy = sum('P'), sell = sum('S');
+        const net = buy.v - sell.v;
+        host.innerHTML = `
+          <div class="scr-head">
+            <div><span class="label">Open-market trades · last 90 days</span>
+              <div class="big ${net > 0 ? 'up' : net < 0 ? 'dn' : ''}">${net > 0 ? 'Net buying' : net < 0 ? 'Net selling' : buy.n + sell.n ? 'Balanced' : 'No open-market trades'}</div>
+              <span class="muted">Buys and sales coded P and S. Awards, option exercises and tax withholding are listed but not counted.</span></div>
+            <div class="kpis">
+              <div><span class="label">Buys</span><b class="up">${buy.n} · $${big(buy.v)}</b></div>
+              <div><span class="label">Sales</span><b class="dn">${sell.n} · $${big(sell.v)}</b></div>
+            </div>
+          </div>
+          <div class="tbl-wrap"><table class="qt"><thead><tr><th scope="col">Date</th><th scope="col">Insider</th><th scope="col">Type</th><th class="num" scope="col">Shares</th><th class="num" scope="col">Price</th><th class="num" scope="col">Value</th><th class="num opt" scope="col">Held after</th></tr></thead><tbody>
+            ${rows.slice(0, 60).map(x => {
+              const v = ok(x.change) && x.price ? Math.abs(x.change * x.price) : null;
+              const dir = x.code === 'P' ? 'up' : x.code === 'S' ? 'dn' : '';
+              return `<tr><td class="muted">${esc(dayLabel(x.date))}</td><td class="name" title="${esc(x.name)}">${esc(x.name)}</td><td class="${dir}">${esc(INS_CODE[x.code] || x.code || '—')}</td><td class="num ${dirOf(x.change)}">${ok(x.change) ? signed(x.change, 0) : '—'}</td><td class="num">${x.price ? usd(x.price) : '—'}</td><td class="num">${v ? '$' + big(v) : '—'}</td><td class="num opt muted">${big(x.held)}</td></tr>`;
+            }).join('')}
+          </tbody></table></div>
+          ${goChips(s.sym, ['DES', 'NEWS'])}
+          <p class="tbl-note">SEC Form 4 filings via Finnhub, newest first.</p>`;
+      });
+    }
+  };
+
+  FN.EVTS = {
+    name: 'Earnings Calendar', sec: 'none', example: 'EVTS',
+    help: 'Who reports in the next one or two weeks, with timing and consensus estimates. Filter to large companies or show all.',
+    mount(p, s) {
+      s.span = s.span === 14 ? 14 : 7;
+      s.all = !!s.all;
+      let data = null;
+      p.body.innerHTML = '<div class="scr"><p class="notice">Loading the earnings calendar…</p></div>';
+      const host = p.body.firstChild;
+      let dead = false;
+      const fetchCal = () => M.calendar(s.span).then(d => { if (!dead) { data = d; draw(); } }, err => { if (!dead) notice(host, errText(err), 'err'); });
+      function draw() {
+        const rows = data.filter(x => s.all || (x.revEst || 0) >= 1e9).slice(0, 200);
+        const days = [...new Set(rows.map(x => x.date))];
+        host.innerHTML = `
+          <div class="most-top">
+            <div class="seg" role="group" aria-label="Window"><button type="button" data-k="span" data-v="7" aria-pressed="${s.span === 7}">7 days</button><button type="button" data-k="span" data-v="14" aria-pressed="${s.span === 14}">14 days</button></div>
+            <div class="seg" role="group" aria-label="Companies"><button type="button" data-k="all" data-v="0" aria-pressed="${!s.all}">Revenue est. ≥ $1B</button><button type="button" data-k="all" data-v="1" aria-pressed="${s.all}">All</button></div>
+          </div>
+          ${rows.length ? `<div class="tbl-wrap"><table class="qt"><thead><tr><th scope="col">Ticker</th><th scope="col">Time</th><th scope="col">Quarter</th><th class="num" scope="col">EPS est.</th><th class="num" scope="col">Revenue est.</th></tr></thead>
+            ${days.map(d => `<tbody><tr class="grp"><th colspan="5" scope="rowgroup">${esc(dayLabel(d))}${d === etToday() ? ' · Today' : ''}</th></tr>` +
+              rows.filter(x => x.date === d).map(x => `<tr data-sym="${esc(x.sym)}" data-fn="ERN" tabindex="0"><td class="sym">${esc(x.sym)}</td><td class="muted">${esc(HOUR[x.hour] || '—')}</td><td class="muted">${x.quarter ? `Q${x.quarter} ${x.year}` : '—'}</td><td class="num">${usd(x.epsEst)}</td><td class="num">${ok(x.revEst) ? '$' + big(x.revEst) : '—'}</td></tr>`).join('') + '</tbody>').join('')}
+          </table></div>` : `<p class="notice">No ${s.all ? '' : 'large-company '}reports in the next ${s.span} days.</p>`}
+          <p class="tbl-note">${data.length} companies report in this window${s.all ? '' : `; showing the ${rows.length} with consensus revenue of $1B or more`}. Select one for its earnings history. Calendar from Finnhub.</p>`;
+      }
+      host.addEventListener('click', e => {
+        const b = e.target.closest('.seg button');
+        if (b) {
+          if (b.dataset.k === 'span') { s.span = +b.dataset.v; save(); notice(host, 'Loading the earnings calendar…'); fetchCal(); }
+          else { s.all = b.dataset.v === '1'; save(); draw(); }
+          return;
+        }
+        const tr = e.target.closest('tr[data-sym]');
+        if (tr) open(p, 'ERN', tr.dataset.sym);
+      });
+      host.addEventListener('keydown', e => { const tr = e.key === 'Enter' && e.target.closest('tr[data-sym]'); if (tr) open(p, 'ERN', tr.dataset.sym); });
+      fetchCal();
+      return { destroy() { dead = true; } };
+    }
+  };
+
+  // ---------- watchlist ----------
+  const WL_KEY = 'amberline.watchlist';
+  const TICKER = /^[A-Z][A-Z.]{0,5}$/;
+  function wlRead() {
+    try { const v = JSON.parse(localStorage.getItem(WL_KEY)); return Array.isArray(v) ? v.filter(x => typeof x === 'string' && TICKER.test(x)).slice(0, 50) : []; } catch (e) { return []; }
+  }
+  function wlWrite(list) { try { localStorage.setItem(WL_KEY, JSON.stringify(list.slice(0, 50))); return true; } catch (e) { return false; } }
+  function wlRefresh() { panels.forEach(q => { if (q.state && q.state.fn === 'WL') load(q, { fn: 'WL' }, false); }); }
+
+  FN.WL = {
+    name: 'Watchlist', sec: 'none', example: 'WL ADD PLTR COIN',
+    help: 'Your own list, saved in this browser. WL ADD TSLA PLTR adds tickers, WL DEL TSLA removes one, WL CLEAR empties it.',
+    mount(p) {
+      const list = wlRead();
+      if (!list.length) {
+        p.body.innerHTML = `<div class="help"><section><h3>Your watchlist is empty</h3>
+          <p>Add tickers from the command line: <b>WL ADD PLTR COIN HOOD</b>. Remove one with <b>WL DEL COIN</b>. The list is saved in this browser only.</p>
+          <div class="chips"><span class="label">Try</span><button type="button" class="chip" data-run="WL ADD SPY QQQ NVDA">WL ADD SPY QQQ NVDA</button></div></section></div>`;
+        p.body.addEventListener('click', e => { const b = e.target.closest('[data-run]'); if (b) run(b.dataset.run); });
+        return {};
+      }
+      const del = { k: 'del', label: '', html: 1, get: i => `<button type="button" class="x" data-del="${esc(i.sym)}" title="Remove ${esc(i.sym)}" aria-label="Remove ${esc(i.sym)}">×</button>` };
+      const cols = [COL.sym, COL.name, COL.last, COL.chg, COL.pct, COL.rng, COL.spark, COL.upd, del];
+      p.body.innerHTML = '<div class="tbl-wrap"></div><p class="tbl-note"></p>';
+      const note = p.body.lastChild;
+      let update = () => {}, dead = false;
+      const shown = () => list.filter(s => I[s]);
+      function render() {
+        const host = p.body.firstChild.cloneNode(false);
+        p.body.firstChild.replaceWith(host);
+        update = quoteTable(host, [{ label: null, syms: shown() }], cols, sym => open(p, 'DES', sym));
+        const waiting = list.length - shown().length;
+        note.textContent = `${list.length} ticker${list.length === 1 ? '' : 's'} · saved in this browser · WL ADD / WL DEL to edit` + (waiting ? ` · looking up ${waiting}…` : '');
+      }
+      p.body.addEventListener('click', e => {
+        const b = e.target.closest('[data-del]');
+        if (!b) return;
+        e.stopPropagation();
+        wlWrite(wlRead().filter(x => x !== b.dataset.del));
+        wlRefresh();
+      }, true);
+      render();
+      const missing = list.filter(s => !I[s]);
+      if (missing.length && M.hasKey) {
+        Promise.allSettled(missing.map(s => M.ensure(s))).then(() => { if (!dead) { render(); watch(); } });
+      }
+      return { syms: shown, tick: () => update(false), destroy() { dead = true; } };
+    }
+  };
+
+  function wlCommand(op, syms) {
+    const cur = wlRead();
+    if (op === 'CLEAR') { wlWrite([]); wlRefresh(); status('Watchlist cleared.'); return; }
+    if (!syms.length) { status(`Add tickers after ${op}, for example <b>WL ${op} TSLA</b>.`, 'err'); return; }
+    const bad = syms.filter(s => !TICKER.test(s));
+    if (bad.length) { status(`<b>${esc(bad[0])}</b> isn't a ticker.`, 'err'); return; }
+    if (op !== 'ADD') {
+      wlWrite(cur.filter(x => !syms.includes(x)));
+      wlRefresh();
+      status(`Removed ${esc(syms.join(', '))} from the watchlist.`);
+      return;
+    }
+    const fresh = syms.filter(x => !cur.includes(x));
+    if (!fresh.length) { status(`${esc(syms.join(', '))} ${syms.length > 1 ? 'are' : 'is'} already on the watchlist.`); return; }
+    const finish = good => {
+      if (!wlWrite(cur.concat(good))) { status("This browser won't let the page save data, so the watchlist can't be kept.", 'err'); return; }
+      const shown = panels.some(q => q.state && q.state.fn === 'WL');
+      if (shown) wlRefresh(); else load(panels[active], { fn: 'WL' });
+      const missed = fresh.filter(x => !good.includes(x));
+      status(`Added ${esc(good.join(', ') || 'nothing')} to the watchlist.` + (missed.length ? ` No quote found for ${esc(missed.join(', '))}.` : ''), missed.length ? 'err' : '');
+    };
+    if (!M.hasKey) { finish(fresh); return; }
+    status(`Checking ${esc(fresh.join(', '))}…`);
+    Promise.allSettled(fresh.map(x => M.ensure(x))).then(rs => finish(fresh.filter((_, k) => rs[k].status === 'fulfilled')));
+  }
+
   FN.KEY = {
     name: 'Data Connection', sec: 'none', example: 'KEY',
     help: 'Connect real market data with your own free Finnhub API key, check the connection, or remove the key.',
@@ -754,7 +1047,35 @@
             <p class="fine"><b>Sharing:</b> Finnhub's terms allow personal use only and forbid sharing its data, or results derived from it, without Finnhub's written approval. Before you present, screenshot, record or stream live data, get that approval or a plan licensed for display. See <a href="https://finnhub.io/terms-of-service" target="_blank" rel="noopener noreferrer">Finnhub's terms</a>.</p>
             <p class="fine">Your key is stored in this browser's local storage and is sent only to Finnhub. Anyone using this browser profile, and any other page on this site's address, can read it, so remove it on shared machines.</p>
           </section>
+          <section>
+            <h3>Chart history · Twelve Data key (optional)</h3>
+            <p>${M.hasHistoryKey ? 'Connected. <b>GP</b> charts load real daily and 5-minute history from Twelve Data, so 1M, 3M, 6M and 1Y all work.' : "Finnhub's free plan has no price history, so <b>GP</b> can only chart trades since you opened the page. A free Twelve Data key adds full 1M–1Y candlestick charts and the one-year line on <b>DES</b>."}</p>
+            ${M.hasHistoryKey ? '' : '<p>Get one at <a href="https://twelvedata.com/register" target="_blank" rel="noopener noreferrer">twelvedata.com/register</a> (the Basic plan is free: 8 requests a minute, 800 a day), then paste it below.</p>'}
+            <form class="keyform tdform" autocomplete="off">
+              <label for="tdKey" class="label">Twelve Data API key</label>
+              <div class="keyrow">
+                <input id="tdKey" type="password" spellcheck="false" autocomplete="off" placeholder="${M.hasHistoryKey ? 'Paste a new key to replace it' : 'Paste your Twelve Data key'}">
+                <button type="submit" class="chip solid">Save</button>
+                ${M.hasHistoryKey ? '<button type="button" class="chip" data-tdclear>Remove key</button>' : ''}
+              </div>
+              <p class="keymsg tdmsg" role="status"></p>
+            </form>
+            <p class="fine">Stored in this browser and sent only to Twelve Data. Their free plan is for personal use too.</p>
+          </section>
         </div>`;
+      const tdForm = p.body.querySelector('.tdform');
+      const tdMsg = p.body.querySelector('.tdmsg');
+      tdForm.addEventListener('submit', e => {
+        e.preventDefault();
+        const k = p.body.querySelector('#tdKey').value.trim();
+        if (!/^[A-Za-z0-9]{16,64}$/.test(k)) { tdMsg.textContent = "That doesn't look like a Twelve Data key. Keys are 32 letters and numbers."; tdMsg.className = 'keymsg tdmsg err'; return; }
+        if (!M.setHistoryKey(k)) { tdMsg.textContent = "This browser won't let the page save data. Try a normal (non-private) window."; tdMsg.className = 'keymsg tdmsg err'; return; }
+        tdMsg.textContent = 'Saved. Reloading…';
+        tdMsg.className = 'keymsg tdmsg';
+        setTimeout(() => location.reload(), 300);
+      });
+      const tdClr = p.body.querySelector('[data-tdclear]');
+      if (tdClr) tdClr.addEventListener('click', () => { M.setHistoryKey(''); location.reload(); });
       const form = p.body.querySelector('form');
       const input = p.body.querySelector('#fhKey');
       const msg = p.body.querySelector('.keymsg');
@@ -776,7 +1097,7 @@
         const se = M.streamError();
         set('feed', (f.state === 'live' ? 'Streaming live trades' : 'Polling quotes about once a minute (no live stream)') + (se ? ' · stream says: ' + se : ''));
         set('req', `${r.used} of ${r.perMinute} this minute${r.queued ? ', ' + r.queued + ' waiting' : ''}`);
-        set('candles', c === true ? 'Included in your plan' : c === false ? 'Not in your plan; charts show live trades instead' : 'Not checked yet');
+        set('candles', M.historySource() === 'Twelve Data' ? 'From Twelve Data (1M–1Y on)' : c === true ? 'Included in your Finnhub plan' : c === false ? 'Not in your Finnhub plan; add a Twelve Data key below' : 'Not checked yet');
         set('auth', a ? a.message : 'Accepted');
       }
       update();
@@ -817,7 +1138,7 @@
           </section>
           <section>
             <h3>About the data</h3>
-            <p>Quotes, profiles, statistics and headlines come from Finnhub through your own API key. Market-wide views use US-listed ETFs as stand-ins for indices, commodities, currencies and Treasuries. Data may be delayed or incomplete. Nothing here is investment advice. Finnhub's terms allow personal use only and forbid sharing its data, or results derived from it, without Finnhub's written approval. Before you present, screenshot, record or stream live data, get that approval or a plan licensed for display.
+            <p>Quotes, profiles, statistics, analyst ratings, earnings, insider trades and headlines come from Finnhub through your own API key. With an optional free Twelve Data key, price charts load full daily and intraday history. Market-wide views use US-listed ETFs as stand-ins for indices, commodities, currencies and Treasuries. Data may be delayed or incomplete. Nothing here is investment advice. Finnhub's terms allow personal use only and forbid sharing its data, or results derived from it, without Finnhub's written approval. Before you present, screenshot, record or stream live data, get that approval or a plan licensed for display.
               Amberline is an independent project and is not affiliated with Bloomberg L.P., Finnhub or any exchange.</p>
           </section>
         </div>`;
@@ -828,7 +1149,8 @@
     }
   };
 
-  const ALIAS = Object.assign(Object.create(null), { G: 'GP', CHART: 'GP', N: 'NEWS', FX: 'FXC', ACT: 'MOST', MOVERS: 'MOST', YC: 'CRV', TSY: 'CRV', CMD: 'CMDTY', W: 'MON', '?': 'HELP', INDEX: 'WEI', NI: 'NEWS', API: 'KEY', LIVE: 'KEY', CONNECT: 'KEY' });
+  const ALIAS = Object.assign(Object.create(null), { G: 'GP', CHART: 'GP', N: 'NEWS', FX: 'FXC', ACT: 'MOST', MOVERS: 'MOST', YC: 'CRV', TSY: 'CRV', CMD: 'CMDTY', W: 'MON', '?': 'HELP', INDEX: 'WEI', NI: 'NEWS', API: 'KEY', LIVE: 'KEY', CONNECT: 'KEY',
+    EE: 'ERN', EARNINGS: 'ERN', RATINGS: 'ANR', RATIOS: 'FA', INSIDER: 'INS', ECAL: 'EVTS', WATCHLIST: 'WL' });
 
   // ---------- panels ----------
   const grid = document.getElementById('grid');
@@ -966,6 +1288,13 @@
   function run(text) {
     const toks = text.trim().toUpperCase().replace(/<[^>]*>/g, ' ').split(/\s+/).filter(Boolean);
     if (!toks.length) return;
+    // Watchlist edits: WL ADD TSLA PLTR, WL DEL TSLA, WL CLEAR
+    if (toks[0] === 'WL' && /^(ADD|DEL|RMV|REMOVE|CLEAR)$/.test(toks[1] || '')) {
+      const pTok = toks.find(t => /^P[1-4]$/.test(t));
+      if (pTok) setActive(+pTok[1] - 1);
+      wlCommand(toks[1] === 'ADD' ? 'ADD' : toks[1] === 'CLEAR' ? 'CLEAR' : 'DEL', toks.slice(2).filter(t => !/^P[1-4]$/.test(t)));
+      return;
+    }
     // A token that is both a function and a ticker (FXC) is a ticker when another function is present.
     const isFn = t => (FN[t] && !FN[t].hidden) || ALIAS[t];
     const fnCount = toks.filter(isFn).length;
@@ -1183,7 +1512,7 @@
   clock();
   updateTape();
   status(M.hasKey
-    ? 'Type any US ticker and a function, then press <b>Enter</b>. Try <b>NVDA GP 1Y</b>, <b>MSFT DES</b> or <b>TOP</b>.'
+    ? 'Type any US ticker and a function, then press <b>Enter</b>. Try <b>NVDA GP 1Y</b>, <b>AAPL ERN</b>, <b>MSFT FA</b> or <b>EVTS</b>.'
     : 'Type <b>KEY</b> to add your free Finnhub key and load real prices, charts and news. Then try <b>NVDA GP 1Y</b>.');
 
   M.onTick(() => {

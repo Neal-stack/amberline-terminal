@@ -38,6 +38,12 @@ Type a **ticker**, a **function**, or both, then press **Enter**. A ticker on it
 | `AAPL GP 6M` | Price graph: candles or line, volume, 20/50-day moving averages. `1D`, `1M`, `3M`, `6M`, `1Y`. |
 | `MSFT DES` | Profile, market cap, P/E, EPS, dividend yield, beta, 52-week range, peers |
 | `NVDA NEWS` | Company headlines from the last 7 days |
+| `NVDA ANR` | Analyst recommendations: consensus, buy/hold/sell mix and six months of history |
+| `AAPL ERN` | Earnings: next report date with EPS and revenue estimates, recent beats and misses (alias `EE`) |
+| `MSFT FA` | Financial analysis: margins, returns, per-share data, multiples and leverage, annual or quarterly |
+| `TSLA INS` | Insider transactions from Form 4 filings, with open-market buy and sell totals |
+| `EVTS` | Earnings calendar for the next 7 or 14 days, filtered to large companies or all |
+| `WL` | Your watchlist. `WL ADD PLTR COIN`, `WL DEL COIN`, `WL CLEAR`. Saved in your browser |
 | `TOP` | Market headlines. Select one for the summary and a link to the publisher. |
 | `WEI` | World markets through country and benchmark ETFs (SPY, QQQ, EWJ…) |
 | `MOST` | Biggest gainers and losers among 20 large caps |
@@ -70,7 +76,8 @@ As understood in October 2026. Check [finnhub.io/pricing](https://finnhub.io/pri
 | Real-time US stock and ETF quotes | Yes | Streamed over WebSocket (extended hours move the last price; charts and the day range use regular hours only), refreshed by REST about once a minute |
 | Company profiles, metrics, peers | Yes | `DES` |
 | Company and market news | Yes | `NEWS`, `TOP` |
-| Historical candles | Usually not (paid add-on) | `GP` tries candles first. If your plan doesn't include them, or no regular-session bars come back, it charts live trades since you opened the page and says so. |
+| Historical candles | Usually not (paid add-on) | Add a free [Twelve Data](https://twelvedata.com/register) key in `KEY` and `GP` loads real daily and 5-minute history from there (8 requests a minute, 800 a day, cached). Without one, `GP` tries Finnhub candles, then charts live trades since you opened the page and says so. |
+| Recommendation trends, earnings surprises, earnings calendar, insider transactions, basic financials | Yes | `ANR`, `ERN`, `EVTS`, `INS`, `FA` |
 | Index levels, futures, spot FX, Treasury yields | No | `WEI`, `CMDTY`, `FXC` and `CRV` use US-listed ETFs as stand-ins and label them that way |
 | 60 API calls a minute | Limit | A request queue sends at most 50 calls a minute and fetches the active panel first |
 
@@ -83,12 +90,14 @@ Finnhub's terms limit its plans to personal use and forbid sharing its data, or 
 ```
 index.html              page shell: top bar, command line, panel grid, function keys, tape
 src/finnhub.js          Finnhub client: rate-limited queue, cache, error types, WebSocket stream
+src/history.js          Twelve Data client for chart history (optional second key)
 src/astral.js           Astral plugin: the same calls, answered by your claude.ai Astral connector
 src/market.js           the market the panels read from: real instruments, sessions, charts, news
 src/terminal.js         front end: command parser, autocomplete, panels, canvas charts
 src/terminal.css        the look: dark trading-screen palette, IBM Plex type
 tests/market.test.js    session-boundary tests for the live market (node tests/market.test.js)
 tests/astral.test.js    tests for the Astral plugin (node tests/astral.test.js)
+tests/screens.test.js   tests for ANR, ERN, FA, the no-Finnhub fallback and Twelve Data history
 tools/mock_finnhub.py   a local stand-in for the Finnhub API, for development and tests
 docs/TEARDOWN.md        the design study behind the interface
 docs/system-design.png  the system design chart above
@@ -125,7 +134,7 @@ A saved Finnhub key always wins. Outside claude.ai (GitHub Pages, a local copy) 
 python tools/mock_finnhub.py
 ```
 
-Then open `http://localhost:8000/?api=http://localhost:8766/api/v1&ws=off` and save any key in `KEY`. Add `--candles` to act like a paid plan that includes historical candles. The key `bad` is rejected so you can test that path. The `api` and `ws` overrides only work when both the page and the endpoint are on `localhost`, so a crafted link can't send someone's key elsewhere.
+Then open `http://localhost:8000/?api=http://localhost:8766/api/v1&ws=off&td=http://localhost:8766/td` and save any key in `KEY` (and any Twelve Data key to test chart history). Add `--candles` to act like a paid plan that includes historical candles. The key `bad` is rejected so you can test that path. The `api` and `ws` overrides only work when both the page and the endpoint are on `localhost`, so a crafted link can't send someone's key elsewhere.
 
 ## Deploy
 

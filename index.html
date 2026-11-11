@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://finnhub.io wss://ws.finnhub.io http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://finnhub.io wss://ws.finnhub.io https://api.twelvedata.com http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <!-- page:start -->
 <title>Amberline Terminal</title>
@@ -12,7 +12,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="src/terminal.css?v=7">
+<link rel="stylesheet" href="src/terminal.css?v=8">
 <!-- head:end -->
 </head>
 <body>
@@ -50,10 +50,11 @@
   <footer class="tape" aria-label="Ticker tape"><div class="tape-track" id="tape"></div></footer>
 </div>
 <noscript><p style="padding:16px">Amberline Terminal needs JavaScript to run.</p></noscript>
-<script src="src/finnhub.js?v=7"></script>
-<script src="src/astral.js?v=7"></script>
-<script src="src/market.js?v=7"></script>
-<script src="src/terminal.js?v=7"></script>
+<script src="src/finnhub.js?v=8"></script>
+<script src="src/astral.js?v=8"></script>
+<script src="src/history.js?v=8"></script>
+<script src="src/market.js?v=8"></script>
+<script src="src/terminal.js?v=8"></script>
 <!-- page:end -->
 </body>
 </html>

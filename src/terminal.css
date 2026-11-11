@@ -451,7 +451,7 @@ kbd { font: 600 10.5px var(--font-data); background: var(--key); color: var(--in
 .read { font: 500 13px var(--font-data); }
 .keypage .keyform { display: grid; gap: 6px; }
 .keyrow { display: flex; flex-wrap: wrap; gap: 8px; }
-#fhKey {
+#fhKey, #tdKey {
   flex: 1 1 260px;
   min-width: 0;
   height: 32px;
@@ -461,12 +461,37 @@ kbd { font: 600 10.5px var(--font-data); background: var(--key); color: var(--in
   color: var(--amber);
   font: 500 13px var(--font-data);
 }
-#fhKey:focus { outline: none; border-color: var(--amber); }
+#fhKey:focus, #tdKey:focus { outline: none; border-color: var(--amber); }
 .chip.solid { background: var(--amber); border-color: var(--amber); color: var(--ink); font-weight: 600; }
 .keymsg { min-height: 1.2em; color: var(--muted); }
 .keymsg.err { color: var(--dn); }
 .help p.fine { font-size: 12.5px; color: var(--muted); }
 .status-list dt { color: var(--muted); font: 500 11px var(--font-label); text-transform: uppercase; letter-spacing: .07em; }
+
+/* ---------- analyst, earnings and fundamentals screens ---------- */
+.scr { padding: 0 0 12px; }
+.scr > .chips, .scr > .stack, .scr > .stack-key { margin-left: 12px; margin-right: 12px; }
+.scr-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 10px 20px; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+.scr-head .muted { font: 12px/1.4 var(--font-label); }
+.big { font: 600 22px/1.25 var(--font-label); letter-spacing: .01em; margin: 2px 0; }
+.key { color: var(--key); }
+.kpis { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.kpis div { display: grid; gap: 2px; }
+.kpis b { font: 600 15px var(--font-data); }
+.stack { display: flex; height: 22px; margin-top: 12px; background: var(--grid); }
+.stack i { display: grid; place-items: center; min-width: 18px; font: normal 600 11px var(--font-data); color: var(--ink); }
+.st-sb { background: var(--up); }
+.st-b { background: #2a9d63; }
+.st-h { background: var(--muted); }
+.st-s { background: #c2434f; }
+.st-ss { background: var(--dn); }
+.stack-key { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 10px; font: 11px var(--font-label); color: var(--muted); }
+.stack-key i { display: inline-block; width: 9px; height: 9px; margin-right: 5px; vertical-align: -1px; }
+.tag { font: 600 10.5px var(--font-label); text-transform: uppercase; letter-spacing: .06em; padding: 0 5px; border: 1px solid currentColor; }
+.qt.fa td:first-child { color: var(--text); font-family: var(--font-label); font-size: 12.5px; }
+.qt .x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 4px; }
+.qt .x:hover { color: var(--dn); }
+.chip[aria-pressed="true"] { border-color: var(--up); color: var(--up); }
 
 /* the disclaimer gets its own line when the function keys need the width */
 @media (max-width: 1400px) {

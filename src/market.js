@@ -35,7 +35,7 @@
     if (!local(location.hostname)) return out;
     const q = new URLSearchParams(location.search);
     if (q.get('ws') === 'off') out.ws = null;
-    [['api', /^https?:$/], ['ws', /^wss?:$/]].forEach(([k, proto]) => {
+    [['api', /^https?:$/], ['ws', /^wss?:$/], ['td', /^https?:$/]].forEach(([k, proto]) => {
       const v = q.get(k);
       if (!v || v === 'off') return;
       try {
@@ -79,7 +79,17 @@
     tape: ['SPY', 'QQQ', 'DIA', 'IWM', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'JPM', 'GLD', 'USO', 'TLT', 'UUP']
   };
 
-  function liveMarket(fh, FinnhubError) {
+  // Rows of the FA screen: Finnhub series keys, labels and how to format them.
+  // Rows Finnhub doesn't return for a company are left out.
+  const FA_ROWS = [
+    ['Per share', [['eps', 'EPS (diluted)', 'usd'], ['salesPerShare', 'Revenue / share', 'usd'], ['fcfPerShareTTM', 'Free cash flow / share', 'usd']]],
+    ['Margins', [['grossMargin', 'Gross margin', 'pct'], ['operatingMargin', 'Operating margin', 'pct'], ['pretaxMargin', 'Pretax margin', 'pct'], ['netMargin', 'Net margin', 'pct'], ['fcfMargin', 'FCF margin', 'pct']]],
+    ['Returns', [['roe', 'Return on equity', 'pct'], ['roa', 'Return on assets', 'pct'], ['roic', 'Return on invested capital', 'pct']]],
+    ['Valuation', [['pe', 'P/E', 'x'], ['ps', 'P/Sales', 'x'], ['pb', 'P/Book', 'x'], ['pfcf', 'P/FCF', 'x']]],
+    ['Balance sheet', [['currentRatio', 'Current ratio', 'x'], ['quickRatio', 'Quick ratio', 'x'], ['totalDebtToEquity', 'Total debt / equity', 'x'], ['netDebtToTotalEquity', 'Net debt / equity', 'x'], ['payoutRatio', 'Payout ratio', 'pct']]]
+  ];
+
+  function liveMarket(fh, FinnhubError, hist) {
     const I = Object.create(null); // keyed by symbols from the network, so no prototype
     const listeners = [];
     const newsCache = new Map();
@@ -128,6 +138,15 @@
     }
     const utcDate = ms => new Date(ms).toISOString().slice(0, 10);
     const BAR = 5 * 60000;
+    const isoDay = d => etDate(Date.now() + d * 864e5); // New York date, d days from today
+    const num = v => (v == null || v === '' || !isFinite(+v) ? null : +v);
+    // Analyst and fundamental screens need Finnhub; Astral and the no-key client don't offer them.
+    function need(method) {
+      if (typeof fh[method] === 'function') return null;
+      return api.hasKey
+        ? new FinnhubError('premium', 'This screen needs a Finnhub key. Type KEY to add one.')
+        : new FinnhubError('nokey', "No Finnhub API key yet, so this screen can't load. Type KEY to add one.");
+    }
 
     function pushTick(i, p, ms) {
       const prevTick = i.ticks[i.ticks.length - 1];
@@ -290,7 +309,8 @@
       authError: () => (blocking(status) ? status : null),
       streamError: () => streamError,
       requests: () => fh.budget(),
-      candles: () => candlesAllowed,
+      candles: () => (hist ? true : candlesAllowed),
+      historySource: () => (hist ? 'Twelve Data' : candlesAllowed ? 'Finnhub' : null),
       feed() {
         if (!api.hasKey) return { label: 'No API key · not connected', state: 'poll' };
         const src = api.source || 'Finnhub';
@@ -336,22 +356,37 @@
           series: () => i.ticks,
           xlabel: b => etTime.format(b.t), tlabel: b => etTime.format(b.t) + ' ET'
         });
-        const fallback = "Historical candles aren't included in your Finnhub plan, so this chart plots live trades and quotes since you opened the page.";
+        const fallback = "Finnhub's free plan has no price history, so this chart plots live trades since you opened the page. Add a free Twelve Data key with KEY for full 1M–1Y charts.";
+        const intraday = tf === '1D';
+        if (hist) {
+          return (intraday ? hist.intraday(sym) : hist.daily(sym)).then(bars => {
+            if (!bars.length) return ticks('Twelve Data returned no bars for ' + sym + '.');
+            return shape(i, tf, bars, 'Twelve Data');
+          }, err => {
+            if (err.kind === 'notfound' || err.kind === 'rate') return ticks(err.message + ' Showing live trades instead.');
+            throw err;
+          });
+        }
         if (candlesAllowed === false) return Promise.resolve(ticks(fallback));
         const now = Math.floor(Date.now() / 1000);
-        const intraday = tf === '1D';
         const from = intraday ? now - 5 * 86400 : now - Math.ceil((SPANS[tf] + 90) * 1.5) * 86400;
         return fh.candles(sym, intraday ? '5' : 'D', from, now).then(r => {
           candlesAllowed = true;
-          let bars = r && r.s === 'ok' && Array.isArray(r.t)
+          const bars = r && r.s === 'ok' && Array.isArray(r.t)
             ? r.t.map((t, k) => ({ t: t * 1000, o: r.o[k], h: r.h[k], l: r.l[k], c: r.c[k], v: r.v ? r.v[k] : 0 }))
             : [];
           if (!bars.length) return ticks('Finnhub returned no bars for this range.');
+          return shape(i, tf, bars, 'Finnhub');
+        }, err => {
+          if (err.kind === 'premium') { candlesAllowed = false; return ticks(fallback); }
+          throw err;
+        });
+        function shape(i, tf, bars, src) {
           // Series live on the instrument so every chart of it shares one copy that
           // streamed prices keep current. Charts read them through closures, never a snapshot.
           if (intraday) {
             bars = bars.filter(b => regular(b.t));
-            if (!bars.length) return ticks('Finnhub returned no regular-session bars for the last few days.');
+            if (!bars.length) return ticks(src + ' returned no regular-session bars for the last few days.');
             const lastDay = etDate(bars[bars.length - 1].t);
             bars = bars.filter(b => etDate(b.t) === lastDay);
             i.series['1D'] = bars;
@@ -373,10 +408,7 @@
             ma: () => ({ src: all(), off: Math.max(0, all().length - len) }),
             xlabel: fmtDaily(long), tlabel: fmtDaily(false), monthly: long
           };
-        }, err => {
-          if (err.kind === 'premium') { candlesAllowed = false; return ticks(fallback); }
-          throw err;
-        });
+        }
       },
       profile(sym) {
         const i = I[sym];
@@ -392,7 +424,20 @@
           if (P.ipo) facts.push(['Listed', String(P.ipo)]);
           const web = safeUrl(P.weburl);
           const failed = [p, m].filter(x => x.status === 'rejected').map(x => x.reason);
+          // With a history key, DES draws a one-year line from the same daily bars GP uses.
+          let spark = null;
+          if (hist) {
+            hist.daily(sym).then(bars => {
+              if (!bars.length) return;
+              const older = (i.series.D || []).filter(b => b.t < bars[0].t);
+              i.series.D = older.concat(bars);
+              syncDaily(i);
+              dirty = true;
+            }, () => {});
+            spark = () => (i.series.D || []).slice(-252).map(b => b.c);
+          }
           return {
+            spark,
             sector: P.finnhubIndustry ? String(P.finnhubIndustry) : i.group,
             about: null,
             facts, web,
@@ -431,6 +476,92 @@
             return item;
           });
           return out.sort((a, b) => b.t - a.t);
+        });
+      },
+      // ---- analyst and fundamental screens (Finnhub free plan) ----
+      analyst(sym) {
+        const e = need('recommendation');
+        if (e) return Promise.reject(e);
+        return fh.recommendation(sym).then(list => {
+          const rows = (Array.isArray(list) ? list : []).filter(r => r && r.period)
+            .map(r => ({ period: String(r.period), sb: +r.strongBuy || 0, b: +r.buy || 0, h: +r.hold || 0, s: +r.sell || 0, ss: +r.strongSell || 0 }))
+            .map(r => Object.assign(r, { total: r.sb + r.b + r.h + r.s + r.ss }))
+            .filter(r => r.total > 0)
+            .sort((a, b) => (a.period < b.period ? 1 : -1))
+            .slice(0, 6);
+          const r = rows[0];
+          const score = r ? (5 * r.sb + 4 * r.b + 3 * r.h + 2 * r.s + r.ss) / r.total : null;
+          const label = score == null ? null : score >= 4.5 ? 'Strong Buy' : score >= 3.5 ? 'Buy' : score >= 2.5 ? 'Hold' : score >= 1.5 ? 'Sell' : 'Strong Sell';
+          return { rows, score, label };
+        });
+      },
+      earnings(sym) {
+        const e = need('earnings');
+        if (e) return Promise.reject(e);
+        const today = isoDay(0);
+        return Promise.allSettled([fh.earnings(sym), fh.earningsCalendar(isoDay(-1), isoDay(120), sym)]).then(([h, c]) => {
+          if (h.status === 'rejected' && c.status === 'rejected') throw h.reason;
+          const history = (h.status === 'fulfilled' && Array.isArray(h.value) ? h.value : []).filter(x => x && x.period)
+            .map(x => ({ period: String(x.period), year: x.year, quarter: x.quarter, est: num(x.estimate), act: num(x.actual), surprise: num(x.surprise), pct: num(x.surprisePercent) }))
+            .sort((a, b) => (a.period < b.period ? 1 : -1));
+          const cal = c.status === 'fulfilled' && c.value && Array.isArray(c.value.earningsCalendar) ? c.value.earningsCalendar : [];
+          const next = cal.filter(x => x && x.date >= today && x.symbol === sym).sort((a, b) => (a.date > b.date ? 1 : -1))[0];
+          return {
+            history,
+            next: next ? { date: next.date, hour: next.hour, year: next.year, quarter: next.quarter, epsEst: num(next.epsEstimate), revEst: num(next.revenueEstimate) } : null
+          };
+        });
+      },
+      calendar(days) {
+        const e = need('earningsCalendar');
+        if (e) return Promise.reject(e);
+        return fh.earningsCalendar(isoDay(0), isoDay(days)).then(r => (r && Array.isArray(r.earningsCalendar) ? r.earningsCalendar : [])
+          .filter(x => x && x.symbol && /^[A-Z][A-Z.]{0,5}$/.test(x.symbol) && x.date)
+          .map(x => ({ sym: x.symbol, date: x.date, hour: x.hour, year: x.year, quarter: x.quarter, epsEst: num(x.epsEstimate), revEst: num(x.revenueEstimate), epsAct: num(x.epsActual) }))
+          .sort((a, b) => (a.date === b.date ? (b.revEst || 0) - (a.revEst || 0) : a.date > b.date ? 1 : -1)));
+      },
+      insiders(sym) {
+        const e = need('insiders');
+        if (e) return Promise.reject(e);
+        return fh.insiders(sym, isoDay(-365), isoDay(0)).then(r => (r && Array.isArray(r.data) ? r.data : [])
+          .filter(x => x && x.name && x.transactionDate)
+          .map(x => ({ name: String(x.name), date: String(x.transactionDate), filed: String(x.filingDate || ''), code: String(x.transactionCode || ''), change: num(x.change), held: num(x.share), price: num(x.transactionPrice) }))
+          .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)));
+      },
+      fundamentals(sym) {
+        return fh.metrics(sym).then(r => {
+          const series = r && r.series ? r.series : {};
+          const Mx = r && r.metric ? r.metric : {};
+          // Finnhub's series give margins and returns as fractions (0.45); TTM metrics as percents (45).
+          // Check against the TTM figure so the table is right either way.
+          let scale = 100;
+          for (const [s, t] of [['grossMargin', 'grossMarginTTM'], ['netMargin', 'netProfitMarginTTM'], ['operatingMargin', 'operatingMarginTTM'], ['roe', 'roeTTM']]) {
+            const list = series.annual && series.annual[s];
+            const v = list && list.length ? num(list[0].v) : null, ttm = num(Mx[t]);
+            if (v != null && ttm != null && ttm !== 0) { scale = Math.abs(v * 100 - ttm) < Math.abs(v - ttm) ? 100 : 1; break; }
+          }
+          const build = (freq, count) => {
+            const src = series[freq] || {};
+            const rows = [];
+            FA_ROWS.forEach(([group, defs]) => defs.forEach(([k, label, kind]) => {
+              const list = Array.isArray(src[k]) ? src[k] : [];
+              const values = {};
+              list.forEach(x => { if (x && x.period && num(x.v) != null) values[x.period] = num(x.v) * (kind === 'pct' ? scale : 1); });
+              if (Object.keys(values).length) rows.push({ k, label, kind, group, values });
+            }));
+            // Year-over-year EPS growth: against the prior year, or the same quarter a year earlier.
+            const eps = rows.find(x => x.k === 'eps');
+            if (eps) {
+              const ps = Object.keys(eps.values).sort();
+              const lag = freq === 'quarterly' ? 4 : 1;
+              const g = {};
+              ps.forEach((p, k) => { const prev = eps.values[ps[k - lag]]; if (k >= lag && prev > 0) g[p] = (eps.values[p] / prev - 1) * 100; });
+              if (Object.keys(g).length) rows.splice(rows.indexOf(eps) + 1, 0, { k: 'epsg', label: 'EPS growth (YoY)', kind: 'pct', group: eps.group, values: g, signed: true });
+            }
+            const periods = [...new Set(rows.flatMap(x => Object.keys(x.values)))].sort().slice(-count);
+            return { rows: rows.filter(x => periods.some(p => x.values[p] != null)), periods };
+          };
+          return { annual: build('annual', 6), quarterly: build('quarterly', 8) };
         });
       },
       newsVersion: () => Math.floor(Date.now() / (4 * 60e3)), // refetch headlines every 4 minutes
@@ -473,7 +604,14 @@
   const dev = key ? devEndpoints() : {};
   const astral = !key && root.AstralPlugin && root.AstralPlugin.available() ? root.AstralPlugin.create(root.Finnhub.FinnhubError) : null;
   const fh = key ? root.Finnhub.create(Object.assign({ key }, dev)) : astral || noKeyClient(root.Finnhub.FinnhubError);
-  const market = liveMarket(fh, root.Finnhub.FinnhubError);
+  // Optional second key: Twelve Data for price history, which Finnhub's free plan lacks.
+  const H = root.History;
+  const tdKey = H ? H.readKey() : '';
+  const tdDev = tdKey ? devEndpoints() : {};
+  const hist = tdKey ? H.create({ key: tdKey, api: tdDev.td, Error: root.Finnhub.FinnhubError }) : null;
+  const market = liveMarket(fh, root.Finnhub.FinnhubError, hist);
+  market.hasHistoryKey = !!hist;
+  market.setHistoryKey = k => (H ? H.writeKey(k) : false);
   market.endpoint = dev.api || root.Finnhub.DEFAULT_API;
   market.mock = !!dev.api; // the local mock server serves made-up data
   market.hasKey = !!key || !!astral;
